@@ -421,19 +421,33 @@
     }
     function q2() {
       noFb(); taskPanel('');
-      renderTask('Әлсіз нүктені табыңыз', 'Тапсырма 2/3: моңғол мұнарасы мен қоршау машиналары жазық жаққа жинақталды. Қай қақпаны нығайту керек?', null, null, 15, null);
+      taskPanel(`
+        <div class="task-card fade-in">
+          <div class="timerline"><i id="tbar"></i></div><div class="tsec" id="tsec">15 сек</div>
+          <h3>Әлсіз нүктені табыңыз</h3>
+          <p class="task-hint">Тапсырма 2/3: моңғол мұнарасы мен қоршау машиналары жазық жаққа жинақталды. 15 секунд ішінде қауіп төнген қақпаны картадан белгілеңіз.</p>
+        </div>`);
+      let answered = false;
+      const stop = startTaskTimer(15, () => answer('timeout'));
       const pts = [
         { id: 'А', x: 480, y: 178, label: 'Солтүстік қақпа' },
         { id: 'Ә', x: 676, y: 317, label: 'Шығыс қақпа' },
         { id: 'Б', x: 480, y: 448, label: 'Оңтүстік қақпа' }
       ];
       OTYRAR_MAP.showWeakPoints(pts, id => {
-        if (busy) return; lock();
+        if (answered || busy) return;
+        stop();
+        answer(id);
+      });
+      function answer(id) {
+        if (answered) return;
+        answered = true; lock();
         OTYRAR_MAP.clearMarks();
         if (id === 'Ә') { applyEffects([['score', 10]]); fb('ok', '✅ Дұрыс! Қоршау техникасы ашық жазықтан — шығыс қақпа тұсынан жайылады. (+10 ⭐)' + onResult(true)); }
+        else if (id === 'timeout') { if (!change('lives', -1)) return; fb('bad', '⏰ Уақыт бітті! Негізгі соққы ашық жазықтан — шығыс қақпа тұсынан түсті. (−1 ❤️)' + onResult(false)); }
         else { if (!change('lives', -1)) return; fb('bad', '❌ Қате нүкте! Негізгі соққы ашық жазық жақтан — шығыстан түсті. (−1 ❤️)' + onResult(false)); }
         later(q3, 1600);
-      });
+      }
     }
     function q3() {
       noFb(); taskPanel('');
