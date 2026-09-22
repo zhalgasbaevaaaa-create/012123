@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="kk">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>🏰 Отырарды Қорға — тарихи ойын (1219–1220)</title>
+<meta name="description" content="Отырардың моңғол шапқыншылығы кезіндегі қорғанысына арналған интерактивті тарихи ойын. Қазақстан тарихы, 1-курс студенттеріне." />
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+
+<!-- ===== 1-ЭКРАН: CINEMATIC INTRO ===== -->
+<section id="screen-intro" class="screen intro" aria-label="Ойынның басты беті">
+  <div class="intro-bg" role="presentation"></div>
+  <div class="intro-inner">
+    <p class="intro-eyebrow">Қазақстан тарихы · интерактивті ойын</p>
+    <h1 class="intro-title"><span class="castle">🏰</span> ОТЫРАРДЫ ҚОРҒА</h1>
+    <p class="intro-year">1219 жыл. Отырар.</p>
+    <p class="intro-text">«Шығыстан моңғол әскері жақындап келеді.<br>Отырардың тағдыры енді сіздің шешімдеріңізге байланысты.»</p>
+    <div class="intro-btns">
+      <button id="btnStart" class="btn btn-xl btn-gold">БАСТАУ</button>
+      <div class="row gap">
+        <button id="btnRules" class="btn btn-lg">Ойын ережесі</button>
+        <button id="btnResume" class="btn btn-lg" hidden>Ойынды жалғастыру</button>
+      </div>
+    </div>
+    <p class="intro-role" id="intro-role">Сіздің рөліңіз: <b>«Отырар қорғанысының қолбасшысы»</b></p>
+  </div>
+  <button id="btnSound" class="sound-btn" aria-label="Дыбысты қосу/өшіру" aria-pressed="false">🔇</button>
+</section>
+
+<!-- ===== ОЙЫН ЭКРАНЫ ===== -->
+<div id="screen-game" class="screen game" hidden>
+  <header id="hud" aria-label="Ойын көрсеткіштері">
+    <div class="hud-row">
+      <span class="pill" id="hud-stage" title="Кезең">Кезең 1/10</span>
+      <span class="pill" id="hud-lives" title="Өмір">❤️ 5</span>
+      <span class="pill" id="hud-defense" title="Қорғаныс">🛡️ 100</span>
+      <span class="pill" id="hud-food" title="Азық">🍞 100</span>
+      <span class="pill" id="hud-army" title="Әскер">⚔️ 100</span>
+      <span class="pill" id="hud-treasury" title="Қазына">💰 100</span>
+      <span class="pill" id="hud-score" title="Ұпай">⭐ 0</span>
+      <span class="pill" id="hud-time" title="Қалған уақыт">⏳ —</span>
+      <button id="btnSound2" class="pill sound-mini" aria-label="Дыбысты қосу/өшіру">🔊</button>
+    </div>
+    <div class="hud-bars">
+      <div class="bar"><span>🛡️</span><i id="bar-defense"></i></div>
+      <div class="bar"><span>🍞</span><i id="bar-food"></i></div>
+      <div class="bar"><span>⚔️</span><i id="bar-army"></i></div>
+      <div class="bar"><span>💰</span><i id="bar-treasury"></i></div>
+    </div>
+  </header>
+
+  <main id="stage-wrap">
+    <div id="stage-head">
+      <h2 id="stage-title">Кезең</h2>
+      <p id="stage-story" class="story"></p>
+    </div>
+    <div id="map-panel" hidden>
+      <div class="map-tools">
+        <button id="zoomIn" class="btn btn-sm" aria-label="Карта үлкейту">＋</button>
+        <button id="zoomOut" class="btn btn-sm" aria-label="Картаны кішірейту">－</button>
+        <button id="zoomReset" class="btn btn-sm" aria-label="Картаны бастапқы күйге келтіру">⟲</button>
+      </div>
+      <div id="map-box" aria-label="Отырар қаласы мен маңының интерактивті картасы" role="application"></div>
+    </div>
+    <div id="task-panel" aria-live="polite"></div>
+    <div id="feedback" aria-live="assertive"></div>
+  </main>
+</div>
+
+<!-- ===== ЕРЕЖЕ МОДАЛЫ ===== -->
+<div id="modal-rules" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="rulesTitle">
+  <div class="modal-card">
+    <h2 id="rulesTitle">📜 Ойын ережесі</h2>
+    <ol class="rules-list">
+      <li>Сіз — <b>«Отырар қорғанысының қолбасшысысыз»</b>. 10 кезең бойы тарихи шешімдер қабылдайсыз.</li>
+      <li>Сізде <b>❤️ 5 өмір</b> бар. Қате жауап, қате таңдау, уақыт біту — <b>−1 өмір</b>.</li>
+      <li>Ресурстарды (🛡️ қорғаныс, 🍞 азық, ⚔️ әскер, 💰 қазына) ұтымды жұмсаңыз — финалға олар әсер етеді.</li>
+      <li>⭐ Дұрыс шешімдер +10 ұпай. Финалда атақ-лауазым аласыз.</li>
+      <li>Кейбір тапсырмаларда уақыт шектеу бар — жоғарғы панельде ⏳ көрсетіледі.</li>
+      <li>Ойын барысы автоматты сақталады — кейін «Ойынды жалғастыру» арқылы қайта аша аласыз.</li>
+    </ol>
+    <p class="muted small">Ойын «Отырардың моңғол шапқыншылығы кезіндегі қорғанысы (1219–1220)» тақырыбына негізделген. Барлық деректер тарихи дереккөздерге сай.</p>
+    <button id="btnRulesClose" class="btn btn-gold btn-lg">Түсіндім</button>
+  </div>
+</div>
+
+<!-- ===== GAME OVER ===== -->
+<section id="screen-gameover" class="screen gameover" hidden aria-label="Ойын аяқталды">
+  <div class="over-card">
+    <p class="over-emoji">💔</p>
+    <h1>Отырар құлады…</h1>
+    <p class="over-text">Барлық өмір бітті. Бірақ тарих — қайталану мүмкіні!<br>Шешімдеріңізді талдап, қайта шабуылға шығыңыз.</p>
+    <p class="muted" id="over-stats"></p>
+    <button id="btnRestart1" class="btn btn-xl btn-gold">ҚАЙТА БАСТАУ</button>
+  </div>
+</section>
+
+<!-- ===== ФИНАЛ ===== -->
+<section id="screen-final" class="screen final" hidden aria-label="Ойын финалы"></section>
+
+<script src="js/questions.js"></script>
+<script src="js/audio.js"></script>
+<script src="js/map.js"></script>
+<script src="js/game.js"></script>
+</body>
+</html>
