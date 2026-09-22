@@ -1,4 +1,10 @@
-/* ОТЫРАРДЫ ҚОРҒА — ойын логикасы: game-state, 10 кезең, таймерлер, save/resume */
+/* ОТЫРАРДЫ ҚОРҒА — ойын логикасы: game-state, 10 кезең, таймерлер, save/resume
+   Стратегиялық аркада-алгоритм:
+   • әр стратегиялық таңдауда 2–3 бір-біріне ұқсас нұсқа (бір белгісімен ерекшеленеді);
+   • сериялық бонус: 3 қатар дұрыс → +5 ⭐ (кез келген қате серияны үзеді);
+   • шешімдер салдарларымен: қорғаныс деңгейі 9-кезеңдегі жөндеу қарқынын өзгертеді,
+     әскер бөлінісі кейінгі шабуыл бағытымен байланысады;
+   • жау әскерінің картадағы жақындауы қателерге тікелей байланысты. */
 'use strict';
 
 (() => {
@@ -7,19 +13,19 @@
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
   const STAGE_TOTAL = 10;
-  const STAGE_FNS = [null, s1, s2, s3, s4, s5, s6, s7, s8, s9, s10]; // function-декларациялар hoist
   const SAVE_KEY = 'otyrar_save_v1';
   const TITLES = ['Қауіп хабары', 'Барлау', 'Қорғанысты ұйымдастыру', 'Азық қоры', 'Тарихи санақ',
     'Қоршау', 'Отырар қақпасы', 'Құпия хабар', 'Соңғы қорғаныс', 'Финал'];
+  const STAGE_FNS = [null, s1, s2, s3, s4, s5, s6, s7, s8, s9, s10];
 
   let S = null;                 // game state
   let quizQueue = [];           // сұрақтар реті (қайталанбау үшін)
-  let stageTimers = [];         // барлық таймерлер (тазарту үшін)
+  let stageTimers = [];         // барлық таймерлер
   let busy = false;             // қос клик қорғанысы
   let over = false;
   let mapReady = false;
   let mapZoneClickBound = false;
-  let s3ctx = null;             // кезең 3 күйі (карта нүктелері)
+  let s3ctx = null;             // кезең 3 күйі (карта нүктелері үшін)
 
   /* ================= Құралдар ================= */
   const shuffle = arr => { const a = arr.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1));[a[i], a[j]] = [a[j], a[i]]; } return a; };
@@ -31,9 +37,9 @@
 
   function story(html) { $('stage-story').innerHTML = html; }
   function taskPanel(html) { $('task-panel').innerHTML = html; }
+  function taskPanelEl() { return $('task-panel'); }
   function fb(type, html) { $('feedback').innerHTML = `<div class="fb ${type}">${html}</div>`; }
   function noFb() { $('feedback').innerHTML = ''; }
-
   function lock() { busy = true; later(() => { busy = false; }, 350); }
 
   /* ================= Ресурстар / HUD ================= */
@@ -52,6 +58,15 @@
   }
   function applyEffects(list) { for (const [k, d] of list) { if (!change(k, d)) return false; } return true; }
 
+  /* сериялық бонус: 3 қатар дұрыс → +5 ⭐ */
+  function onResult(ok) {
+    if (ok) {
+      S.streak = (S.streak || 0) + 1;
+      if (S.streak % 3 === 0) { change('score', 5); return '<span class="expl">🔥 3 қатар дұрыс шешім — қолбасшылық белгісі +5 ⭐!</span>'; }
+    } else S.streak = 0;
+    return '';
+  }
+
   function updateHUD(changedKey, delta) {
     if (!S) return;
     const vals = { lives: `❤️ ${S.lives}`, defense: `🛡️ ${S.defense}`, food: `🍞 ${S.food}`, army: `⚔️ ${S.army}`, treasury: `💰 ${S.treasury}`, score: `⭐ ${S.score}` };
@@ -59,7 +74,7 @@
       const el = $('hud-' + k);
       if (!el) continue;
       el.textContent = vals[k];
-      if (k === changedKey) {
+      if (k === changedKey && delta) {
         el.classList.remove('pop', 'hurt'); void el.offsetWidth;
         el.classList.add(delta < 0 ? 'hurt' : 'pop');
       }
@@ -70,6 +85,7 @@
     }
     if (changedKey && delta) {
       const pill = $('hud-' + changedKey);
+      if (!pill || !pill.getBoundingClientRect) return;
       const rect = pill.getBoundingClientRect();
       const f = document.createElement('span');
       f.className = 'float-pts ' + (delta > 0 ? 'plus' : 'minus');
@@ -99,7 +115,7 @@
     return stop;
   }
 
-  /* ================= Экрандар / навигация ================= */
+  /* ================= Экрандар ================= */
   function showScreen(name) {
     $('screen-intro').hidden = name !== 'intro';
     $('screen-game').hidden = name !== 'game';
@@ -127,7 +143,7 @@
     return q;
   }
 
-  /* ================= СSau / Resume ================= */
+  /* ================= Save / Resume ================= */
   function save() { try { localStorage.setItem(SAVE_KEY, JSON.stringify({ S, quizQueue })); } catch (e) { /* ignore */ } }
   function loadSave() {
     try {
@@ -138,7 +154,7 @@
   }
   function clearSave() { try { localStorage.removeItem(SAVE_KEY); } catch (e) { /* ignore */ } }
 
-  /* ================= Кезеңдер ================= */
+  /* ================= Кезеңдерді іске қосу ================= */
   function runStage(n) {
     clearStageTimers(); noFb();
     S.stage = n; save();
@@ -147,84 +163,93 @@
     $('stage-title').textContent = `Кезең ${n} — ${TITLES[n - 1]}`;
     $('map-panel').hidden = ![2, 3, 7].includes(n);
     if (!mapReady) { OTYRAR_MAP.init($('map-box')); mapReady = true; }
-    OTYRAR_MAP.setArmyProgress(Math.min(0.97, (n - 1) / STAGE_TOTAL + 0.04));
+    /* 2-кезеңде (барлау) орданы да, жау әскерін де ЖАСЫРУ — ойыншы өзі талдау керек */
+    OTYRAR_MAP.setCampVisible(n !== 2);
+    OTYRAR_MAP.setArmyVisible(n !== 2);
+    OTYRAR_MAP.setArmyProgress(Math.min(0.97, (n - 1) / STAGE_TOTAL + 0.05));
     STAGE_FNS[n]();
   }
 
-  /* ---- Кезең 1: ҚАУІП ---- */
+  /* ---- Кезең 1: ҚАУІП (ұқсас нұсқалармен стратегия) ---- */
   function s1() {
-    story('Хабаршы жүгіріп келді: «Моңғол әскері Сырдариядан өтіп, Отырарға жақындады! Қолбасшы, қаланың қорғанысын ұйымдастырыңыз!»');
+    story('Хабаршы жүгіріп келді: «Моңғол әскері Сырдариядан өтіп, Отырарға жақындады!» Қорғанысты үш қадаммен ұйымдастырыңыз — нұсқалар ұқсас, айырмашылығы майда.');
     taskPanel('');
     stepA();
     function stepA() {
-      renderTask('Қақпаны қалай күшейтесіз?', 'Дұрыс шешім — қорғанысты нығайтады.',
-        ['Тасблок пен кірпішпен қақпаны бекіту, алдына жер үйіндісін төгу',
-         'Ағаш қалқандармен ғана жабу',
-         'Ештеңе істемеу — қабырға бұрыннан берік деп сену'],
+      renderTask('Қақпаны қалай бекітесіз?', 'Төрт нұсқаның үшеуі — тасблок туралы бір ойдың түрлендіруі.',
+        ['Тасблокпен жабу + алдына терең ор қазу + жер үйіндісін төгу',
+         'Тасблокпен жабу + алдына ағаш қалқандар қою',
+         'Тасблокпен жабу — басқа шығынға бармай-ақ',
+         'Ағаш қалқандармен ғана жабу'],
         i => {
-          if (i === 0) { applyEffects([['score', 10], ['defense', 10], ['treasury', -10]]); fb('ok', '✅ Қақпа нығайтылды! (+10 ⭐, 🛡️ +10, 💰 −10)'); }
-          else if (i === 1) { applyEffects([['score', 3], ['defense', 4], ['treasury', -3]]); fb('info', '⚠️ Ағаш қалқан — уақытша ғана көмек. (+3 ⭐, 🛡️ +4)'); }
-          else { if (!change('lives', -1)) return; applyEffects([['defense', -5]]); fb('bad', '❌ Қате шешім! Қақпа әлсіз қалды. (−1 ❤️, 🛡️ −5)'); }
-          later(stepB, 1400);
+          if (i === 0) { applyEffects([['score', 10], ['defense', 10], ['treasury', -10]]); fb('ok', '✅ Тасблок + ор + жер үйіндісі — тарихи қоршау тактикасының тура үлгісі! (+10 ⭐, 🛡️ +10, 💰 −10)' + onResult(true)); }
+          else if (i === 1) { applyEffects([['score', 5], ['defense', 5], ['treasury', -8]]); fb('info', '⚠️ Орсыз тасблок — жау тәулікте бұзады. (+5 ⭐, 🛡️ +5, 💰 −8)' + onResult(false)); }
+          else if (i === 2) { applyEffects([['score', 3], ['defense', 3], ['treasury', -4]]); fb('info', '⚠️ Жалаңаш тасблок — бұзылуға тез төзеді. (+3 ⭐, 🛡️ +3)' + onResult(false)); }
+          else { if (!change('lives', -1)) return; applyEffects([['defense', -5]]); fb('bad', '❌ Ағаш қалқан — бір соққыға сынады. (−1 ❤️, 🛡️ −5)' + onResult(false)); }
+          later(stepB, 1500);
         });
     }
     function stepB() {
       noFb(); taskPanel('');
-      renderTask('Күзетшілерді қалай орналастырасыз?', 'Қоршау кезінде бақылау — өмір мен өлім мәселесі.',
-        ['Тәулік бойы ауысыммен күзет, мұнараларда бақылаушылар',
-         'Тек түн күзеті жеткілікті',
-         'Барлық әскерді тынығуға қалдыру'],
+      renderTask('Күзетті қалай ұйымдастырасыз?', 'Барлық нұсқа — күзет туралы, бірақ тек біреуі тәулік бойы үздіксіз.',
+        ['Тәуліктік ауысым: мұнараларда бақылаушы, қақпада екі еселенген күзет',
+         'Тек түнгі ауысымды екі еселеу — күндізгісі жеткілікті',
+         'Тек күндізгі күзет — түнде жау шабуылдамайды',
+         'Күзетсіз: қабырғаның өзі қорған деп есептеу'],
         i => {
-          if (i === 0) { applyEffects([['score', 10], ['defense', 5]]); fb('ok', '✅ Күзет үздіксіз жүргізілді! (+10 ⭐, 🛡️ +5)'); }
-          else { if (!change('lives', -1)) return; fb('bad', i === 1 ? '❌ Түнде ғана күзет — таңертең жау қабырға басында… (−1 ❤️)' : '❌ Әскер демалыста қалды — қала қорғансыз! (−1 ❤️)'); }
-          later(stepC, 1400);
+          if (i === 0) { applyEffects([['score', 10], ['defense', 5]]); fb('ok', '✅ Үздіксіз тәуліктік күзет — қорғаныстың көзі. (+10 ⭐, 🛡️ +5)' + onResult(true)); }
+          else { if (!change('lives', -1)) return; fb('bad', '❌ Күзет тәулік бойы үздіксіз болуы керек еді — жау аңдып тұр. (−1 ❤️)' + onResult(false)); }
+          later(stepC, 1500);
         });
     }
     function stepC() {
       noFb(); taskPanel('');
-      renderTask('Азық қорын есептеңіз.', 'Логикалық тапсырма: қала қанша астық жинайды?',
-        ['40 000 келі', '80 000 келі', '160 000 келі', '20 000 келі'],
+      renderTask('Азық есебі (логика)', 'Қалада 8 000 адам бар. Тәулігіне 1 адамға 0,5 келі қажет. 20 күндік қоршауға қанша астық жинау керек?',
+        ['40 000 келі','60 000 келі','80 000 келі','100 000 келі'],
         i => {
-          if (i === 1) { applyEffects([['score', 10], ['food', 5]]); fb('ok', '✅ Дұрыс: 8 000 × 0,5 кг × 20 күн = 80 000 келі! (+10 ⭐, 🍞 +5)'); }
-          else { if (!change('lives', -1)) return; fb('bad', '❌ Қате есеп: 8 000 адам × 0,5 келі × 20 күн = 80 000 келі керек. (−1 ❤️)'); }
+          if (i === 2) { applyEffects([['score', 10], ['food', 5]]); fb('ok', '✅ Дұрыс: 8 000 × 0,5 келі × 20 күн = 80 000 келі! (+10 ⭐, 🍞 +5)' + onResult(true)); }
+          else { if (!change('lives', -1)) return; fb('bad', '❌ Қате есеп: 8 000 × 0,5 × 20 = 80 000 келі керек. (−1 ❤️)' + onResult(false)); }
           later(() => runStage(2), 2200);
         });
     }
   }
 
-  /* ---- Кезең 2: БАРЛАУ (карта) ---- */
+  /* ---- Кезең 2: БАРЛАУ (төрт қақпа, ордасыз карта) ---- */
   function s2() {
-    story('Барлаушылар аттанды. Картамен жұмыс: моңғол әскері қай бағыттан келеді? Карта бетіндегі жанданған нүктелердің бірін таңдаңыз.');
-    taskPanel('<div class="task-card fade-in"><h3>Картамен жұмыс</h3><p class="task-hint">Жау әскерінің жолын анықтаңыз. Картаны үлкейтуге болады (＋ / −).</p></div>');
-    OTYRAR_MAP.showDirections(dirId => {
+    story('Барлаушылар қайтты. Картада — тек Отырардың төрт қақпасы және әр қақпаның алдыңғы жері. Моңғол ордасы әлі белгісіз: <b>топографияны талдап</b>, 150–200 мыңдық әскер мен қоршау техникасы қай қақпа алдында жайылатынын анықтаңыз. Қақпаны картадан таңдаңыз.');
+    taskPanel(`<div class="task-card fade-in"><h3>Топографиялық барлау</h3>
+      <p class="task-hint">Кеңес: әр қақпаның алдыңғы жеріне қараңыз — шатқал, жазық, өзен жағасы, тар алқап. Ірі атты әскер мен тас ату машиналары қай жерде еркін жайылады? Картаны үлкейтуге болады (＋ / −).</p></div>`);
+    OTYRAR_MAP.showGates(gateId => {
       if (busy) return; lock();
-      const d = D.directions.find(x => x.id === dirId);
-      OTYRAR_MAP.hideDirections();
-      if (d.correct) {
+      const g = D.gates.find(x => x.id === gateId);
+      OTYRAR_MAP.hideGates();
+      /* жау пайда болды: таңдау жасалған соң орданы көрсету */
+      OTYRAR_MAP.setCampVisible(true);
+      OTYRAR_MAP.setArmyVisible(true);
+      OTYRAR_MAP.setArmyProgress(0.92);
+      if (g.correct) {
         applyEffects([['score', 10]]);
-        OTYRAR_MAP.setArmyProgress(0.55);
-        fb('ok', `✅ Дұрыс! ${esc(d.tip)} (+10 ⭐)`);
+        fb('ok', `✅ Дұрыс! ${esc(g.terrain)} ${esc(g.why)} (+10 ⭐)` + onResult(true));
       } else {
         if (!change('lives', -1)) return;
         applyEffects([['defense', -5]]);
-        OTYRAR_MAP.setArmyProgress(0.8);
-        fb('bad', `❌ Қате бағыт! ${esc(d.tip)} (−1 ❤️, 🛡️ −5)`);
+        fb('bad', `❌ Қате! ${esc(g.terrain)} ${esc(g.why)} Дұрысы — шығыс жазығы: ірі әскер мен техника тек ашық далаға жайылады. (−1 ❤️, 🛡️ −5)` + onResult(false));
       }
       nextBtn('Қорғанысты ұйымдастыруға өту ▶', () => runStage(3));
     });
   }
 
-  /* ---- Кезең 3: ҚОРҒАНЫС (drag & drop) ---- */
+  /* ---- Кезең 3: ӘСКЕРДІ ҚАҚПАЛАРҒА БӨЛУ (drag & drop) ---- */
   function s3() {
-    story('100 жауынгерді 4 қорғаныс нүктесіне бөліңіз. Білесіз бе: жау керуен жолымен келеді — басым соққы қай жаққа түсерін барлаушылар айтқан.');
+    story('100 жауынгерді 4 қақпаға бөліңіз. Барлау дерегі: басым соққы солтүстік шатқал алды мен шығыс жазыққа түсуі мүмкін — бірақ басқа қақпаларды жалаңаш қалдырсаңыз, қауіп басқа жақтан оралады.');
     OTYRAR_MAP.showWallZones(zoneId => { if (!busy) addToZone(zoneId, 10); });
     const counts = { north: 0, east: 0, west: 0, south: 0 };
     let pool = 100;
 
     taskPanel(`
       <div class="task-card fade-in">
-        <h3>Әскерді бөлу</h3>
-        <p class="task-hint">Токенді сүйреңіз (drag & drop) немесе басып, нүктені таңдаңыз. Телефонда − / + батырмаларын қолдануға болады.</p>
+        <h3>Әскерді қақпаларға бөлу</h3>
+        <p class="task-hint">Токенді сүйреңіз (drag & drop) немесе басып, картадан қақпаны таңдаңыз. Телефонда − / + батырмалары да жұмыс істейді.</p>
         <div class="pool">
           <span>Қалды:</span><span class="zcount" id="poolNum">100</span>
           <div class="token" id="dragToken" role="button" tabindex="0" aria-label="Жауынгерлер тобын сүйреу (10 адам)" title="Сүйріңіз немесе басып таңдаңыз">⚔️</div>
@@ -304,38 +329,40 @@
       const { north, east, west, south } = counts;
       if (north >= 30 && east >= 30 && west >= 10 && south >= 10) {
         applyEffects([['score', 10], ['defense', 10]]);
-        fb('ok', '✅ Өте ұтымды бөлу! Басым бағыттар мықты қорғалды. (+10 ⭐, 🛡️ +10)');
+        fb('ok', '✅ Өте ұтымды бөлу! Басым бағыттар мықты, қалған қақпалар да жалаңаш емес. (+10 ⭐, 🛡️ +10)' + onResult(true));
       } else if (north >= 30 && east >= 30) {
         applyEffects([['score', 5], ['defense', 5]]);
-        fb('info', '⚠️ Негізгі бағыттар қорғалды, бірақ басқа қабырғалар жалаңаш қалды. (+5 ⭐, 🛡️ +5)');
+        fb('info', '⚠️ Басым бағыттар қорғалды, бірақ батыс/оңтүстік жалаңаш — жау сол жақтан оралады. (+5 ⭐, 🛡️ +5)' + onResult(false));
       } else {
         if (!change('lives', -1)) return;
         applyEffects([['defense', -10]]);
-        fb('bad', '❌ Әскер дұрыс бөлінбеді: жау басым соққысын солтүстік қақпа мен шығыс мұнарасына түсірді. (−1 ❤️, 🛡️ −10)');
+        fb('bad', '❌ Әскер дұрыс бөлінбеді: басым соққы солтүстік шатқал алды мен шығыс жазыққа түсті. (−1 ❤️, 🛡️ −10)' + onResult(false));
       }
       nextBtn('Азық қорына өту ▶', () => runStage(4));
     });
     refresh();
   }
 
-  /* ---- Кезең 4: АЗЫҚ ҚОРЫ ---- */
+  /* ---- Кезең 4: АЗЫҚ ҚОРЫ (ұқсас нұсқалар) ---- */
   function s4() {
-    story('Қоршау ұзаққа созылуы мүмкін. Азықты қалай бөлесіз? Әр шешімнің бағасы бар.');
-    renderTask('Азық қорын басқару', 'Шешіміңіз ресурстарға әсер етеді.',
-      ['Рационды бақылаумен үнемдеу: тәуліктік үлесті қысқартып, малды қалада ұстау',
-       'Қазынаға көрші елдерден астық сатып алу',
-       'Азық іздеу үшін жеке отрядты далаға шығару'],
+    story('Қоршау ұзаққа созылуы мүмкін. Азық басқаруының нұсқалары ұқсас — айырмашылығы үлестегі грамм мен малдың орны.');
+    renderTask('Азық қорын басқару', 'Әр шешімнің ресурстарға әсері әртүрлі.',
+      ['Тәуліктік үлесті 0,5 келіден 0,4 келіге қысқарту, малды қалада ұстау',
+       'Тәуліктік үлесті 0,5 келіден 0,3 келіге қысқарту, малды қала сыртына қуу',
+       'Үлесті қысқартпай-ақ астықты тек жауынгерлерге бөлу',
+       'Қазынаға көрші елдерден астық жеткізіп алу'],
       i => {
-        if (i === 0) { applyEffects([['score', 10], ['food', -10], ['defense', 5]]); fb('ok', '✅ Дана шешім! Рацион үнемделіп, рух нығайды. (+10 ⭐, 🍞 −10, 🛡️ +5)'); }
-        else if (i === 1) { applyEffects([['score', 5], ['treasury', -40], ['food', 20]]); fb('info', '💰 Астық жетілді, бірақ қазына босады. (+5 ⭐, 💰 −40, 🍞 +20)'); }
-        else { applyEffects([['army', -12], ['food', 8], ['defense', -5]]); fb('bad', '⚔️ Отряд малмен қайтты, бірақ жолда шайқаста жауынгерлерден айырылдыңыз. (⚔️ −12, 🍞 +8, 🛡️ −5)'); }
+        if (i === 0) { applyEffects([['score', 10], ['food', -10], ['defense', 5]]); fb('ok', '✅ Дана шешім: үлесті аздап қысқарту халық көтерілісін тудырмайды, мал қалада — таза ет пен сүт бар. (+10 ⭐, 🍞 −10, 🛡️ +5)' + onResult(true)); }
+        else if (i === 1) { applyEffects([['score', 3], ['food', -15], ['army', -5]]); fb('info', '⚠️ 0,3 келі — ашаршылық шегі, ал сырттағы малды моңғол жасақтары айдап әкетті. (+3 ⭐, 🍞 −15, ⚔️ −5)' + onResult(false)); }
+        else if (i === 2) { if (!change('lives', -1)) return; applyEffects([['defense', -8]]); fb('bad', '❌ Әскерге ғана астық — қала халқы наразы болып, қорғаныс әлсіреді. (−1 ❤️, 🛡️ −8)' + onResult(false)); }
+        else { applyEffects([['score', 5], ['treasury', -40], ['food', 20]]); fb('info', '💰 Астық жетілді, бірақ қазына босады — кейінгі шығынға есеп жоқ. (+5 ⭐, 💰 −40, 🍞 +20)' + onResult(false)); }
         nextBtn('Тарихи санаққа өту ▶', () => runStage(5));
       });
   }
 
-  /* ---- Кезең 5: ТАРИХИ СҰРАҚ (20 сек) ---- */
+  /* ---- Кезең 5: ТАРИХИ СҰРАҚ (5 × 20 сек) ---- */
   function s5() {
-    story('Мұғалім мен көне жылнамашы сарайында: тарихын білген қолбасшы — жеңімпаз. 5 сұрақ, әрқайсысына 20 секунд.');
+    story('Көне жылнамашы сарайында: тарихын білген қолбасшы — жеңімпаз. 5 сұрақ, әрқайсысына 20 секунд. Нұсқалар ұқсас — байқап оқыңыз.');
     let done = 0;
     askNext();
     function askNext() {
@@ -346,9 +373,9 @@
     }
   }
 
-  /* ---- Кезең 6: ҚОРШАУ (синематик + жоспар) ---- */
+  /* ---- Кезең 6: ҚОРШАУ (синематик + ұқсас жоспарлар) ---- */
   function s6() {
-    story('Төбеден шаң бағанасы көрінді… Моңғол әскері қабырға алдында тізілді. Тулар желбіреді, жер дірілдейді.');
+    story('Төбеден шаң бағанасы көрінді… Моңғол ордасы қабырға алдында тізілді. Тулар желбірейді, жер дірілдейді.');
     OTYRAR_MAP.setArmyProgress(0.97);
     OtyrarAudio.drums();
     taskPanel(`<div class="task-card fade-in" style="text-align:center">
@@ -359,49 +386,52 @@
     later(showPlans, OTYRAR_MAP.isReducedMotion() ? 900 : 3400);
     function showPlans() {
       noFb();
-      renderTask('Қорғаныс жоспарын таңдаңыз', 'Тарихи жағдайға сүйеніп шешім қабылдаңыз.',
-        ['Қабырғада, мұнараларда және қақпа басында қорғану',
-         'Ашық далаға шығып, жалпы шайқасқа кіру',
-         'Қаланы тастап, түнде Отырардан кету'],
+      renderTask('Қорғаныс жоспарын таңдаңыз', 'Төрт жоспардың үшеуі — әскердің орналасуы туралы бір ойдың түрлендіруі.',
+        ['Бүкіл периметр бойынша: мұнараларда — тас атушылар, қақпа басында — найзалылар, резерв — циттелде',
+         'Бүкіл әскерді тек қақпа басына шоғырлау',
+         'Бүкіл әскерді тек мұнараларға бөлу, қақпаны бос қалдыру',
+         'Бүкіл әскерді қабырғадан түсіріп, ашық далаға шығару'],
         i => {
-          if (i === 0) { applyEffects([['score', 10], ['defense', 10]]); fb('ok', '✅ Дұрыс стратегия! Тарихта Отырар дәл осындай қорғаныспен 5 ай тойтарыс берді. (+10 ⭐, 🛡️ +10)'); }
-          else if (i === 1) { if (!change('lives', -1)) return; applyEffects([['army', -15]]); fb('bad', '❌ Ашық далада моңғол атты әскерінен мықтысы жоқ еді… (−1 ❤️, ⚔️ −15)'); }
-          else { if (!change('lives', -1)) return; applyEffects([['food', -10], ['defense', -15]]); fb('bad', '❌ Қаланы тастау — халықты қорғансыз қалдыру. (−1 ❤️, 🍞 −10, 🛡️ −15)'); }
+          if (i === 0) { applyEffects([['score', 10], ['defense', 10]]); fb('ok', '✅ Дұрыс: периметрлік қорғаныс + резерв — тарихтағы қала қорғанысының классикасы. (+10 ⭐, 🛡️ +10)' + onResult(true)); }
+          else if (i === 3) { if (!change('lives', -1)) return; applyEffects([['army', -15]]); fb('bad', '❌ Ашық далада моңғол атты әскерінен мықтысы жоқ еді… (−1 ❤️, ⚔️ −15)' + onResult(false)); }
+          else { if (!change('lives', -1)) return; applyEffects([['defense', -8]]); fb('bad', '❌ Периметрдің бір тұсы ашық қалды — жау соны тапты. (−1 ❤️, 🛡️ −8)' + onResult(false)); }
           nextBtn('Қақпа шайқасына өту ▶', () => runStage(7));
         });
     }
   }
 
-  /* ---- Кезең 7: ОТЫРАР ҚАҚПАСЫ (жылдам тапсырмалар) ---- */
+  /* ---- Кезең 7: ОТЫРАР ҚАҚПАСЫ (жылдам, ұқсас нұсқалар) ---- */
   function s7() {
-    story('Қақпаға шабуыл басталды! Әр шешімге — 15 секунд. Жылдам болыңыз, қолбасшы!');
+    story('Қақпаға шабуыл басталды! Әр шешімге — 15 секунд. Нұсқалар тек бір қарумен ерекшеленеді — сәттілік егжей-тегжейде.');
     OTYRAR_MAP.setArmyProgress(0.97);
     q1();
     function q1() {
-      renderTaskTimed('Моңғолдар қабырғаға жылжытқыш мұнара алып келді. Не тиімді?', 'Тапсырма 1/3 — 15 секунд!',
-        ['Мұнараға тас атушы машиналар мен отты жебелер',
-         'Қылыш пен найзамены жаяу шығу',
-         'Қақпаны ашып, жалпы шабуылға көшу',
-         'Жебені үнемдеп, күтіп тұру'],
+      renderTaskTimed('Жылжытқыш мұнара қабырғаға жақындады. Не тиімдірек?', 'Тапсырма 1/3 — 15 секунд!',
+        ['Мұнараға қарсы тас ату машиналарын қою ӘРІ отты жебе ату',
+         'Мұнараға қарсы тек отты жебе ату',
+         'Мұнараға қарсы тек тас ату машиналарын қою',
+         'Қылышпен жаяу шығып, мұнараны қолмен өртеу'],
         15, i => {
-          if (i === 0) { applyEffects([['score', 10], ['defense', 5]]); fb('ok', '✅ Мұнара жойылды! (+10 ⭐, 🛡️ +5)'); }
-          else { if (!change('lives', -1)) return; applyEffects([['army', -8]]); fb('bad', '❌ Мұнара қабырғаға жақындады… (−1 ❤️, ⚔️ −8)'); }
+          if (i === 0) { applyEffects([['score', 10], ['defense', 5]]); fb('ok', '✅ Тас + от тіркесімі мұнараны жойды: ағаш қаңқа өртеніп, жөндеуге үлгермеді. (+10 ⭐, 🛡️ +5)' + onResult(true)); }
+          else if (i === 1) { if (!change('lives', -1)) return; applyEffects([['army', -8]]); fb('bad', '❌ Тек от — жеткіліксіз: жебе мұнараны тоқтатпады. (−1 ❤️, ⚔️ −8)' + onResult(false)); }
+          else if (i === 2) { if (!change('lives', -1)) return; applyEffects([['army', -8]]); fb('bad', '❌ Тек тас — мұнараның ағаш қаңқасы аман қалып, жақындай берді. (−1 ❤️, ⚔️ −8)' + onResult(false)); }
+          else { if (!change('lives', -1)) return; applyEffects([['army', -12]]); fb('bad', '❌ Жаяу шығушылар мұнара астында жойылды. (−1 ❤️, ⚔️ −12)' + onResult(false)); }
           later(q2, 1600);
         }, 0);
     }
     function q2() {
       noFb(); taskPanel('');
-      renderTask('Әлсіз нүктені табыңыз', 'Тапсырма 2/3: моңғол мұнарасы мен қоршау машиналары бір тұсқа жинақталды. Картадан қай нүктені нығайту керек?', null, null, 15, null);
+      renderTask('Әлсіз нүктені табыңыз', 'Тапсырма 2/3: моңғол мұнарасы мен қоршау машиналары жазық жаққа жинақталды. Қай қақпаны нығайту керек?', null, null, 15, null);
       const pts = [
-        { id: 'А', x: 470, y: 210, label: 'Солтүстік қақпа' },
-        { id: 'Ә', x: 640, y: 315, label: 'Шығыс мұнарасы' },
-        { id: 'Б', x: 340, y: 400, label: 'Батыс қабырға' }
+        { id: 'А', x: 480, y: 178, label: 'Солтүстік қақпа' },
+        { id: 'Ә', x: 676, y: 317, label: 'Шығыс қақпа' },
+        { id: 'Б', x: 480, y: 448, label: 'Оңтүстік қақпа' }
       ];
       OTYRAR_MAP.showWeakPoints(pts, id => {
         if (busy) return; lock();
         OTYRAR_MAP.clearMarks();
-        if (id === 'Ә') { applyEffects([['score', 10]]); fb('ok', '✅ Дұрыс! Шабуылдың бағыты — шығыс мұнарасы. (+10 ⭐)'); }
-        else { if (!change('lives', -1)) return; fb('bad', '❌ Қате нүкте! Негізгі соққы шығыстан түсті. (−1 ❤️)'); }
+        if (id === 'Ә') { applyEffects([['score', 10]]); fb('ok', '✅ Дұрыс! Қоршау техникасы ашық жазықтан — шығыс қақпа тұсынан жайылады. (+10 ⭐)' + onResult(true)); }
+        else { if (!change('lives', -1)) return; fb('bad', '❌ Қате нүкте! Негізгі соққы ашық жазық жақтан — шығыстан түсті. (−1 ❤️)' + onResult(false)); }
         later(q3, 1600);
       });
     }
@@ -433,8 +463,8 @@
         if (busy) return; lock();
         const i = +b.dataset.i;
         zone.querySelectorAll('.opt').forEach(x => x.disabled = true);
-        if (i === q.c) { b.classList.add('correct'); applyEffects([['score', 10]]); fb('ok', '✅ Дұрыс! (+10 ⭐) ' + esc(q.e)); }
-        else { b.classList.add('wrong'); if (!change('lives', -1)) return; fb('bad', '❌ Қате жауап. (−1 ❤️)'); }
+        if (i === q.c) { b.classList.add('correct'); applyEffects([['score', 10]]); fb('ok', '✅ Дұрыс! (+10 ⭐) ' + esc(q.e) + onResult(true)); }
+        else { b.classList.add('wrong'); if (!change('lives', -1)) return; fb('bad', '❌ Қате жауап. (−1 ❤️)' + onResult(false)); }
         later(() => { noFb(); dqIdx++; if (dqIdx < D.documentQuestions.length) askDocQ(); else startMatching(); }, 1900);
       }));
     }
@@ -445,7 +475,7 @@
       taskPanel(`
         <div class="task-card fade-in">
           <h3>Сәйкестендіру: тұлға ↔ рөл</h3>
-          <p class="task-hint">Сол жақтан тұлғаны, оң жақтан рөлін таңдаңыз.</p>
+          <p class="task-hint">Сол жақтан тұлғаны, оң жақтан рөлін таңдаңыз. 2 және одан көп қате — −1 ❤️.</p>
           <div class="match">
             <div class="col-a">${D.matching.map((m, i) => `<button class="opt" data-a="${i}">${esc(m.a)}</button>`).join('')}</div>
             <div class="col-b">${roles.map(r => `<button class="opt" data-b="${r.i}">${esc(r.text)}</button>`).join('')}</div>
@@ -465,30 +495,32 @@
           b.classList.add('mdone'); aBtns[selA].classList.add('mdone'); aBtns[selA].classList.remove('msel');
           selA = null; pairs++; OtyrarAudio.correct();
           if (pairs === D.matching.length) {
-            if (mistakes <= 1) { applyEffects([['score', 10]]); fb('ok', `✅ Барлық сәйкестік дұрыс! (${mistakes} қате) (+10 ⭐)`); }
-            else { if (!change('lives', -1)) return; fb('bad', `❌ Көп қате: ${mistakes}. (−1 ❤️)`); }
+            if (mistakes <= 1) { applyEffects([['score', 10]]); fb('ok', `✅ Барлық сәйкестік дерлік дұрыс (${mistakes} қате)! (+10 ⭐)` + onResult(true)); }
+            else { if (!change('lives', -1)) return; fb('bad', `❌ Көп қате: ${mistakes}. (−1 ❤️)` + onResult(false)); }
             nextBtn('Соңғы қорғанысқа өту ▶', () => runStage(9));
           }
         } else {
           mistakes++; b.classList.add('wrong'); OtyrarAudio.wrong();
           later(() => b.classList.remove('wrong'), 500);
-          if (mistakes > 2) fb('info', '💡 Кеңес: Шыңғыс хан — жаулаушы, Қайыр хан — Отырар билеушісі.');
+          if (mistakes > 2) fb('info', '💡 Кеңес: Жалал әд-Дин — соңғы хорезмшах; Тимур Мәлік — Ходжент қорғанысы.');
         }
       }));
     }
   }
 
-  /* ---- Кезең 9: СОҢҒЫ ҚОРҒАНЫС ---- */
+  /* ---- Кезең 9: СОҢҒЫ ҚОРҒАНЫС (қорғаныс деңгейі қарқынды өзгертеді) ---- */
   function s9() {
-    story('Шешуші шабуыл! Ресурстарыңыз есептеледі. Қабырға бұзылып жатыр — жөндеушілерді жіберіңіз, содан кейін хронологияны дәл айтпасаңыз, жоспар құлауы мүмкін.');
+    story('Шешуші шабуыл! Қабырға бұзылады — қорғаныс деңгейіңіз жөндеу қарқынын анықтайды. Содан кейін хронологияны дәл қалпына келтіріңіз.');
     breachGame(() => later(chronologyStep, 1200));
 
     function breachGame(onDone) {
       const dur = 20;
+      /* аркадалық салдар: қорғаныс төмен → бұзылыс жиі */
+      const spawnMs = S.defense >= 70 ? 2400 : S.defense >= 40 ? 2000 : 1600;
       taskPanel(`
         <div class="task-card fade-in">
           <h3>Қабырғаны жөндеу</h3>
-          <p class="task-hint">20 секунд ішінде пайда болған бұзылыстарды басып жабыңыз!</p>
+          <p class="task-hint">20 секунд ішінде пайда болған бұзылыстарды басып жабыңыз! ${S.defense < 40 ? '🛡️ Қорғаныс төмен — бұзылыс қарқынды!' : ''}</p>
           <div class="timerline"><i id="tbar"></i></div><div class="tsec" id="tsec">${dur} сек</div>
           <div class="breach-zone" id="breachZone">
             <img src="assets/siege.jpg" alt="Қабырғадағы шайқас көрінісі" />
@@ -512,16 +544,16 @@
         });
         zone.appendChild(b);
         spawned++;
-      }, 2100);
+      }, spawnMs);
       const stopT = startTaskTimer(dur, finish);
       function finish() {
         clearInterval(spawner);
         const i = stageTimers.findIndex(x => x.t === spawner); if (i > -1) stageTimers.splice(i, 1);
         zone.querySelectorAll('.breach-target').forEach(x => x.remove());
         const need = Math.ceil(spawned * 0.7);
-        if (spawned > 0 && repaired >= need) { applyEffects([['score', 10], ['defense', 5]]); fb('ok', `✅ Қабырға ұсталды: ${repaired}/${spawned} жөнделді! (+10 ⭐, 🛡️ +5)`); }
+        if (spawned > 0 && repaired >= need) { applyEffects([['score', 10], ['defense', 5]]); fb('ok', `✅ Қабырға ұсталды: ${repaired}/${spawned} жөнделді! (+10 ⭐, 🛡️ +5)` + onResult(true)); }
         else if (spawned === 0) { fb('info', '🛡️ Бұзылыс болмады — қабырға мықты тұрды.'); }
-        else { if (!change('lives', -1)) return; applyEffects([['defense', -10]]); fb('bad', `❌ Тым көп бұзылыс қалды (${repaired}/${spawned}). (−1 ❤️, 🛡️ −10)`); }
+        else { if (!change('lives', -1)) return; applyEffects([['defense', -10]]); fb('bad', `❌ Тым көп бұзылыс қалды (${repaired}/${spawned}). (−1 ❤️, 🛡️ −10)` + onResult(false)); }
         later(onDone, 2000);
       }
     }
@@ -533,7 +565,7 @@
       renderTask('Хронологияны қалпына келтіріңіз', 'Оқиғаларды дұрыс ретпен (ескіден жаңаға) басыңыз.',
         null, null, null, null);
       taskPanelEl().querySelector('.task-card').insertAdjacentHTML('beforeend',
-        `<div class="chrono">${order.map(o => `<button class="opt" data-i="${o.i}"><span class="ch-num">?</span> ${esc(o.y ? o.t : o.t)}</button>`).join('')}</div>`);
+        `<div class="chrono">${order.map(o => `<button class="opt" data-i="${o.i}"><span class="ch-num">?</span> ${esc(o.t)}</button>`).join('')}</div>`);
       const btns = [...taskPanelEl().querySelectorAll('.chrono .opt')];
       btns.forEach(b => b.addEventListener('click', () => {
         if (busy || b.disabled) return; lock();
@@ -543,15 +575,15 @@
           b.querySelector('.ch-num').textContent = D.chronology[i].y;
           expected++; OtyrarAudio.correct();
           if (expected === D.chronology.length) {
-            if (mistakes === 0) { applyEffects([['score', 10]]); fb('ok', '✅ Хронология мінсіз! (+10 ⭐)'); }
-            else { fb('info', `📜 Хронология жиналды, бірақ ${mistakes} қате болды.`); }
+            if (mistakes === 0) { applyEffects([['score', 10]]); fb('ok', '✅ Хронология мінсіз! (+10 ⭐)' + onResult(true)); }
+            else { fb('info', `📜 Хронология жиналды, бірақ ${mistakes} қате болды.` + onResult(false)); }
             later(finalStep, 1800);
           }
         } else {
           mistakes++; b.classList.add('wrong');
           later(() => b.classList.remove('wrong'), 500);
           if (!change('lives', -1)) return;
-          fb('bad', '❌ Қате рет! (−1 ❤️)');
+          fb('bad', '❌ Қате рет! (−1 ❤️)' + onResult(false));
         }
       }));
     }
@@ -560,10 +592,10 @@
       noFb(); taskPanel('');
       if (S.defense >= 40 && S.food >= 30 && S.army >= 30) {
         applyEffects([['score', 10]]);
-        fb('ok', `🏆 Соңғы қорғаныс тойтарылды! Ресурстар жеткілікті: 🛡️${S.defense} 🍞${S.food} ⚔️${S.army}. (+10 ⭐)`);
+        fb('ok', `🏆 Соңғы қорғаныс тойтарылды! Ресурстар жеткілікті: 🛡️${S.defense} 🍞${S.food} ⚔️${S.army}. (+10 ⭐)` + onResult(true));
       } else {
         if (!change('lives', -1)) return;
-        fb('bad', `❌ Ресурстар таусылып, қорғаныс жұқарады: 🛡️${S.defense} 🍞${S.food} ⚔️${S.army}. (−1 ❤️)`);
+        fb('bad', `❌ Ресурстар таусылып, қорғаныс жұқарады: 🛡️${S.defense} 🍞${S.food} ⚔️${S.army}. (−1 ❤️)` + onResult(false));
       }
       later(() => runStage(10), 2200);
     }
@@ -619,9 +651,7 @@
     showScreen('gameover');
   }
 
-  /* ================= Жалпы тапсырма рендерлері ================= */
-  function taskPanelEl() { return $('task-panel'); }
-
+  /* ================= Жалпы рендерлер ================= */
   function renderTask(title, hint, options, onPick) {
     taskPanel(`
       <div class="task-card fade-in">
@@ -664,11 +694,11 @@
     renderTaskTimed((tag ? tag + '. ' : '') + q.q, 'Бір дұрыс жауапты таңдаңыз. Қате жауап — −1 өмір.', q.o, sec, i => {
       if (i === q.c) {
         applyEffects([['score', 10]]);
-        fb('ok', `✅ Дұрыс! +10 ⭐<span class="expl">${esc(q.e)}</span>`);
+        fb('ok', `✅ Дұрыс! +10 ⭐<span class="expl">${esc(q.e)}</span>` + onResult(true));
         OtyrarAudio.correct();
       } else {
         if (!change('lives', -1)) return;
-        fb('bad', '❌ Қате жауап. (−1 ❤️)');
+        fb('bad', '❌ Қате жауап. (−1 ❤️)' + onResult(false));
       }
       later(onDone, 1600);
     }, q.c);
@@ -677,10 +707,9 @@
   /* ================= Бастау / қайта бастау ================= */
   function startNew() {
     over = false;
-    S = { lives: 5, defense: 100, food: 100, army: 100, treasury: 100, score: 0, stage: 1, qi: 0 };
+    S = { lives: 5, defense: 100, food: 100, army: 100, treasury: 100, score: 0, stage: 1, qi: 0, streak: 0 };
     buildQuizQueue();
     clearSave();
-    $('intro-role').hidden = false;
     showScreen('game');
     updateHUD();
     runStage(1);
@@ -690,12 +719,13 @@
     if (!d) return startNew();
     over = false;
     S = d.S; quizQueue = d.quizQueue;
+    if (!S.streak) S.streak = 0;
     showScreen('game');
     updateHUD();
     runStage(S.stage);
   }
 
-  /* ================= Дыбыс батырмалары ================= */
+  /* ================= Дыбыс ================= */
   function syncSound() {
     const on = OtyrarAudio.isEnabled();
     const icon = on ? '🔊' : '🔇';
@@ -716,14 +746,13 @@
   $('btnRestart1').addEventListener('click', () => { OtyrarAudio.click(); startNew(); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('modal-rules').hidden) { $('modal-rules').hidden = true; $('btnRules').focus(); } });
 
-  /* сақталған ойын бар-жоғы */
   (function initIntro() {
     syncSound();
     if (loadSave()) $('btnResume').hidden = false;
     $('btnResume').addEventListener('click', () => { OtyrarAudio.click(); resume(); });
   })();
 
-  /* ================= Тест үшін хук (өндіріске зиянсыз) ================= */
+  /* ================= Тест үшін хук ================= */
   window.OtyrarTest = {
     state: () => S,
     isBusy: () => busy,
